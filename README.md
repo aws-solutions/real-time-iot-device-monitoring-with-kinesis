@@ -9,8 +9,7 @@ sudo apt-get install install zip wget gawk sed -y
 
 ## Building Lambda Package
 ```bash
-cd deployment
-./build-s3-dist.sh source-bucket-base-name
+./deployment/build-s3-dist.sh source-bucket-base-name
 ```
 source-bucket-base-name should be the base name for the S3 bucket location where the template will source the Lambda code from.
 The template will append '-[region_name]' to this value.
