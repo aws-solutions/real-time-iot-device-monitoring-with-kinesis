@@ -1,0 +1,15 @@
+localStorage.setItem('UserPoolClientId', '<USER_POOL_CLIENT_ID>');
+localStorage.setItem('UserPoolId', '<USER_POOL_ID>');
+localStorage.setItem('AnalyticsTable', '<ANALYTICS_TABLE>');
+localStorage.setItem('Region', '<REGION>');
+localStorage.setItem('IdentityPoolId', '<IDENTITY_POOL_ID>');
+var _dashboard_usage = 'True';
+var _hit_data = {
+    Solution: '<SOLUTION_ID>',
+    UUID: '<UUID>',
+    Data: {
+        dashboard: 1,
+        region: '<REGION>'
+    }
+}
+            

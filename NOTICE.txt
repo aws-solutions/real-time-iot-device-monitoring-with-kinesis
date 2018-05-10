@@ -1,0 +1,2 @@
+Real Time IoT Device Monitoring with Kinesis Analytics
+Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
