@@ -1151,7 +1151,7 @@ Resources:
       Handler: index.handler
       MemorySize: 256
       Role: !GetAtt CustomResourceHelperRole.Arn
-      Runtime: nodejs6.10
+      Runtime: nodejs8.10
       Timeout: 300
 
   CustomResourceHelperRole:
