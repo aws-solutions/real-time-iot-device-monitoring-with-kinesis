@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "(S0039) - Real-Time IoT Device Monitoring with Kinesis Analytics: Analyze IoT Device Connectivity using Kinesis Analytics"
 Parameters:
+
   UserName:
     Description: The username of the user you want to create in Amazon Cognito.
     Type: String
@@ -1151,7 +1152,7 @@ Resources:
       Handler: index.handler
       MemorySize: 256
       Role: !GetAtt CustomResourceHelperRole.Arn
-      Runtime: nodejs6.10
+      Runtime: nodejs10.x
       Timeout: 300
 
   CustomResourceHelperRole:
