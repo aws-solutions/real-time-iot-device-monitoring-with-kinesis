@@ -8,9 +8,7 @@ export initial_dir=`pwd`
 
 # Run unit tests
 echo "Running unit tests"
-echo "cd ../source"
-cd "./source/custom-resource"
-npm test
+echo "No unit tests to run..."
 
 cd "$initial_dir"
 

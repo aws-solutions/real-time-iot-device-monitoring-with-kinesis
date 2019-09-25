@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "(S0039) - Real-Time IoT Device Monitoring with Kinesis Analytics: Analyze IoT Device Connectivity using Kinesis Analytics"
+Description: "(SO0039) - Real-Time IoT Device Monitoring with Kinesis Analytics: Analyze IoT Device Connectivity using Kinesis Analytics"
 Parameters:
   UserName:
     Description: The username of the user you want to create in Amazon Cognito.
@@ -43,7 +43,7 @@ Mappings:
   SourceCode:
     General:
       S3Bucket: '%%BUCKET_NAME%%'
-      KeyPrefix: real-time-iot-device-monitoring-with-kinesis/latest
+      KeyPrefix: real-time-iot-device-monitoring-with-kinesis/%%VERSION%%
       LogPrefix: real-time-iot-device-monitoring-with-kinesis/
   KinesisAnalyticsApp:
     Outputs:
@@ -60,7 +60,7 @@ Mappings:
   Solution:
     Data:
       ID: SO0039
-      Version: 1.0.0
+      Version: %%VERSION%%
       SendAnonymousUsageData: 'True'
 
 Resources:
@@ -141,6 +141,9 @@ Resources:
     DeletionPolicy: Retain
     Type: AWS::S3::Bucket
     Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LogsBucket
+        LogFilePrefix: raw-metrics-bucket/
       LifecycleConfiguration:
         Rules:
         - Id: ExpirationRule
@@ -199,6 +202,11 @@ Resources:
                       - ':'
                       - !Ref AWS::AccountId
                       - ':log-group:*'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "The wildcard action in the logs policy is required"
 
   KinesisAnalyticsApp:
     Type: AWS::KinesisAnalytics::Application
@@ -549,7 +557,6 @@ Resources:
             Action: 'sts:AssumeRole'
       Path: '/'
       Policies:
-
         # Read from RawMetricsDeliveryStream
         - PolicyName: 'KinesisAnalyticsReadRawMetrics'
           PolicyDocument:
@@ -560,7 +567,6 @@ Resources:
                   - firehose:DescribeDeliveryStream
                   - firehose:Get*
                 Resource: !Sub '${RawMetricsDeliveryStream.Arn}'
-
         # Post to ProcessedMetricsDeliveryStream
         - PolicyName: 'KinesisAnalyticsPutProcessedMetrics'
           PolicyDocument:
@@ -573,7 +579,6 @@ Resources:
                   - firehose:PutRecord
                   - firehose:PutRecordBatch
                 Resource: !Sub '${ProcessedMetricsDeliveryStream.Arn}'
-
         # Invoke UpdateDDBLambda
         - PolicyName: UpdateDDBLambdaInvocation
           PolicyDocument:
@@ -583,7 +588,6 @@ Resources:
                 Action:
                   - lambda:InvokeFunction
                 Resource: !Sub '${UpdateDDBLambda.Arn}'
-
         # Write to CloudWatch
         - PolicyName: KinesisAnalyticsAppLogging
           PolicyDocument:
@@ -603,6 +607,13 @@ Resources:
                       - ':'
                       - !Ref AWS::AccountId
                       - ':log-group:*'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "The wildcard action in the logs policy is required"
+          - id: F3
+            reason: "The wildcard action in the KinesisAnalyticsReadRawMetrics policy permits the KinesisAnalyticsApp to read from the RawMetricsDeliveryStream. The wildcard resource in the KinesisAnalyticsAppLogging policy permits the KinesisAnalyticsApp to log events to CloudWatch."
 
   KinesisAnalyticsAppFirehoseOutput:
     Type: AWS::KinesisAnalytics::ApplicationOutput
@@ -663,6 +674,9 @@ Resources:
     DeletionPolicy: Retain
     Type: AWS::S3::Bucket
     Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LogsBucket
+        LogFilePrefix: processed-metrics-bucket/
       LifecycleConfiguration:
         Rules:
         - Id: ExpirationRule
@@ -721,7 +735,11 @@ Resources:
                       - ':'
                       - !Ref AWS::AccountId
                       - ':log-group:*'
-
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "The wildcard action in the logs policy is required"
 # UpdateDDBLambda
   UpdateDDBLambda:
     Type: AWS::Lambda::Function
@@ -759,7 +777,7 @@ Resources:
       Handler: update_ddb_from_stream.lambda_handler
       MemorySize: 256
       Role: !GetAtt UpdateDDBLambdaRole.Arn
-      Runtime: python2.7
+      Runtime: python3.7
       Timeout: 300
 
   UpdateDDBLambdaRole:
@@ -816,6 +834,13 @@ Resources:
                       - ':'
                       - !Ref AWS::AccountId
                       - ':log-group:*'
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: F3
+              reason: "The wildcard action in the root policy permits the UpdateDDBLambda function to read from the ProcessedMetricsDeliveryStream. The wilcard resource in the UpdateDDBLambdaLogging policy permits the UpdateDDBLambda function to log events to CloudWatch."
+            - id: W11
+              reason: "The wildcard action required to log events to CloudWatch."
 
 # Database
   AnalyticsTable:
@@ -872,6 +897,11 @@ Resources:
                   - cloudwatch:DeleteAlarms
                 Resource:
                   - '*'
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W11
+              reason: "The wildcard action in the root policy permits the UpdateDDBLambda function to read from the ProcessedMetricsDeliveryStream. The wilcard resource in the UpdateDDBLambdaLogging policy permits the UpdateDDBLambda function to log events to CloudWatch."
 
   AnalyticsTableWriteCapacityTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
@@ -924,22 +954,88 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LogsBucket
+        LogFilePrefix: website-bucket/
       WebsiteConfiguration:
-        IndexDocument: index.html
-
+        IndexDocument: "index.html"
+        ErrorDocument: "index.html"
   WebsiteBucketPolicy:
-    Type: AWS::S3::BucketPolicy
+    Type: "AWS::S3::BucketPolicy"
     Properties:
-      Bucket: !Ref WebsiteBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal: '*'
-          Action:
-            - s3:GetObject
-          Resource:
-            - !Sub '${WebsiteBucket.Arn}/*'
+        Bucket:
+            Ref: "WebsiteBucket"
+        PolicyDocument:
+            Statement:
+                -
+                    Action:
+                        - "s3:GetObject"
+                    Effect: "Allow"
+                    Resource:
+                        Fn::Join:
+                            - ""
+                            -
+                                - "arn:aws:s3:::"
+                                -
+                                    Ref: "WebsiteBucket"
+                                - "/*"
+                    Principal:
+                        CanonicalUser: !GetAtt WebsiteOriginAccessIdentity.S3CanonicalUserId
+  WebsiteOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+        CloudFrontOriginAccessIdentityConfig:
+            Comment: !Sub "access-identity-${WebsiteBucket}"
+  WebsiteDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+          DistributionConfig:
+              Comment: "Website distribution for solution"
+              Origins:
+                  -
+                      Id: S3-solution-website
+                      DomainName: !Sub "${WebsiteBucket}.s3.${AWS::Region}.amazonaws.com"
+                      S3OriginConfig:
+                          OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${WebsiteOriginAccessIdentity}"
+              DefaultCacheBehavior:
+                  TargetOriginId: S3-solution-website
+                  AllowedMethods:
+                      - GET
+                      - HEAD
+                      - OPTIONS
+                      - PUT
+                      - POST
+                      - PATCH
+                      - DELETE
+                  CachedMethods:
+                      - GET
+                      - HEAD
+                      - OPTIONS
+                  ForwardedValues:
+                      QueryString: 'false'
+                  ViewerProtocolPolicy: redirect-to-https
+              IPV6Enabled: 'true'
+              ViewerCertificate:
+                  CloudFrontDefaultCertificate: 'true'
+              Enabled: 'true'
+              HttpVersion: 'http2'
+              Logging:
+                IncludeCookies: 'false'
+                Bucket: !GetAtt LogsBucket.DomainName
+                Prefix: cloudfront-logs/
+
+  ##Logging bucket for cloudFront and other solution buckets
+  LogsBucket:
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: LogDeliveryWrite
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "This is the logs bucket for all the other S3 Buckets and CloudFront"
+
 
 # Cognito for Dashboard Users
   CognitoUserPool:
@@ -961,7 +1057,7 @@ Resources:
               </p>
               <p>
               Please sign in to the dashboard with the user name and your temporary password provided above at: <br />
-              https://s3.${AWS::Region}.amazonaws.com/${WebsiteBucket}/index.html
+              https://${WebsiteDistribution.DomainName}/index.html
               </p>
           EmailSubject: 'Your Real-Time IoT Device Monitoring dashboard Login'
         UnusedAccountValidityDays: 7
@@ -974,7 +1070,7 @@ Resources:
           </p>
           <p>
           Please sign in to the dashboard with the user name and temporary password provided above at: <br />
-          https://s3.${AWS::Region}.amazonaws.com/${WebsiteBucket}/index.html
+          https://${WebsiteDistribution.DomainName}/index.html
           </p>
       EmailVerificationSubject: 'Your Real-Time IoT Device Monitoring dashboard Login'
       Policies:
@@ -1069,6 +1165,11 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   - !GetAtt AnalyticsTable.Arn
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F3
+            reason: "The wildcard action in the cognito-sync policy permits the AuthenticatedUser role to interface with Amazon Cognito."
 
   UnauthenticatedUserRole:
     Type: AWS::IAM::Role
@@ -1151,7 +1252,7 @@ Resources:
       Handler: index.handler
       MemorySize: 256
       Role: !GetAtt CustomResourceHelperRole.Arn
-      Runtime: nodejs6.10
+      Runtime: nodejs8.10
       Timeout: 300
 
   CustomResourceHelperRole:
@@ -1172,7 +1273,6 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-
               # Get website objects from AWS Solutions bucket.
               - Effect: Allow
                 Action:
@@ -1188,7 +1288,6 @@ Resources:
                         - SourceCode
                         - General
                         - KeyPrefix
-
               # Put website objects into WebsiteBucket
               - Effect: Allow
                 Action:
@@ -1201,7 +1300,6 @@ Resources:
                   - !Sub '${WebsiteBucket.Arn}'
                   - !Sub '${WebsiteBucket.Arn}/'
                   - !Sub '${WebsiteBucket.Arn}/*'
-
         # Enable Bucket Encryption
         - PolicyName: EnableBucketEncryption
           PolicyDocument:
@@ -1213,7 +1311,6 @@ Resources:
                 Resource:
                   - !Sub '${RawMetricsBucket.Arn}'
                   - !Sub '${ProcessedMetricsBucket.Arn}'
-
         # Write to CloudWatch
         - PolicyName: CloudWatchLoggingPolicy
           PolicyDocument:
@@ -1233,6 +1330,11 @@ Resources:
                       - ':'
                       - !Ref AWS::AccountId
                       - ':log-group:*'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "The wildcard action in the logs policy is required"
 
   CustomResourceKinesisAnalyticsPolicy:
     Type: AWS::IAM::Policy
@@ -1279,6 +1381,7 @@ Resources:
             - General
             - KeyPrefix
       WebsiteBucket: !Ref WebsiteBucket
+      sourceManifest: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"], "web-site-manifest.json"]]
       UUID: !GetAtt GenerateUUID.UUID
 
   ConfigureWebsite:
@@ -1330,7 +1433,7 @@ Resources:
 Outputs:
   DashboardUrl:
     Description: The URL to the Dashboard.
-    Value: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${WebsiteBucket}/index.html'
+    Value: !Sub 'https://${WebsiteDistribution.DomainName}/index.html'
   IoTTopicName:
     Description: The IoT Topic to monitor.
     Value: !Ref IoTTopicName

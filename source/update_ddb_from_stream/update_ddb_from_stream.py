@@ -1,17 +1,17 @@
-from __future__ import print_function
+
 from itertools import groupby
 import boto3
 import botocore
 import base64
 import logging
 import os
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 from json import loads,dumps
 from collections import OrderedDict
 from datetime import datetime
 from operator import itemgetter
 from random import randint
-from sys import maxint
+from sys import maxsize
 from time import sleep
 
 log_level = str(os.environ.get('LOG_LEVEL')).upper()
@@ -67,7 +67,7 @@ def put_record(metric_type, event_time, data, concurrency_token=None):
         'MetricType': {'S':metric_type},
         'EventTime': {'S':event_time},
         'Data': {'S':dumps(data)},
-        'ConcurrencyToken': {'N':str(randint(0,maxint))}
+        'ConcurrencyToken': {'N':str(randint(0,maxsize))}
     }
 
     if concurrency_token:
@@ -85,12 +85,12 @@ def merge_record_with_ddb(record_data, ddb_record):
     metric_type = ddb_record['Item']['MetricType']['S']
     concurrency_token = int(ddb_record['Item']['ConcurrencyToken']['N'])
     merged_data = { k : merge_values(record_data, ddb_data, metric_type, k) for k in set(record_data) | set(ddb_data) }
-    merged_data = OrderedDict(sorted(merged_data.iteritems(), key=itemgetter(1), reverse=True))
+    merged_data = OrderedDict(sorted(iter(merged_data.items()), key=itemgetter(1), reverse=True))
     return merged_data
 
 def merge_values(record_data, set_data, metric_type, k):
-    if not record_data.has_key(k): return set_data[k]
-    if not set_data.has_key(k): return record_data[k]
+    if k not in record_data: return set_data[k]
+    if k not in set_data: return record_data[k]
     return type_operator_map[metric_type]([set_data[k], record_data[k]])
 
 def merge_record_values(metric_key, grouped_rows):
@@ -112,10 +112,14 @@ def sendAnonymousData(event_time,dataDict):
     # API Gateway URL to make HTTP POST call
     url = 'https://metrics.awssolutionsbuilder.com/generic'
     data=dumps(postDict)
+    data_utf8 = data.encode('utf-8')
     log.debug('sendAnonymousData data: %s', data)
-    headers = {'content-type': 'application/json'}
-    req = urllib2.Request(url, data, headers)
-    rsp = urllib2.urlopen(req)
+    headers = {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': len(data_utf8)
+    }
+    req = urllib.request.Request(url, data_utf8, headers)
+    rsp = urllib.request.urlopen(req)
     rspcode = rsp.getcode()
     content = rsp.read()
     log.debug("Response from APIGateway: %s, %s", rspcode, content)
@@ -131,12 +135,12 @@ def lambda_handler(event, context):
 
     for record in payload:
 
-        decoded_data = base64.b64decode(record['data'])
+        decoded_data = base64.b64decode(record['data']).decode("utf-8")
 
         log.debug('decoded_data: %s', decoded_data)
 
         data = [decoded_data.strip().split(',')]
-        data = filter(lambda x: x[2]!="null", data)
+        data = [x for x in data if x[2]!="null"]
 
         for metric_key, metric_group in groupby(data, key=lambda x:"{0}|{1}".format(x[0],x[1])):
             grouped_metric = list(metric_group)
@@ -148,7 +152,7 @@ def lambda_handler(event, context):
             event_time, metric_type = record_key.split('|')
             log.debug('event_time: %s', event_time)
             log.debug('metric_type: %s', metric_type)
-            record_data = OrderedDict(sorted(output[record_key].iteritems(), key=itemgetter(1), reverse=True))
+            record_data = OrderedDict(sorted(iter(output[record_key].items()), key=itemgetter(1), reverse=True))
 
             ddb_record = client.get_item(
                 TableName=table_name,
@@ -168,7 +172,7 @@ def lambda_handler(event, context):
         output_record = {
             'recordId': record['recordId'],
             'result': 'Ok',
-            'data': base64.b64encode(decoded_data)
+            'data': base64.b64encode(decoded_data.encode("utf-8")).decode("utf-8")
         }
         output_array.append(output_record)
 

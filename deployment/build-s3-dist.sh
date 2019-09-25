@@ -13,63 +13,56 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-export solution_name="real-time-iot-device-monitoring-with-kinesis"
-
 # Create `dist` directory
 echo "Starting to build distribution"
-echo "export initial_dir=`pwd`"
-export initial_dir=`pwd`
-export deployment_dir="$initial_dir/deployment"
-export dist_dir="$initial_dir/deployment/dist"
-echo "Clean up $dist_dir"
-rm -rf $dist_dir
-echo "mkdir -p $dist_dir"
-mkdir -p "$dist_dir"
+export deployment_dir=`pwd`
+echo $deployment_dir
+[ -e dist ] && rm -r dist
+echo "mkdir -p dist"
+mkdir -p "dist"
 
 # Copy CFT & swap parameters
-cp "$deployment_dir/$solution_name.yaml" "$dist_dir/$solution_name.template"
+echo "cp real-time-iot-device-monitoring-with-kinesis.yaml dist/real-time-iot-device-monitoring-with-kinesis.template"
+cp real-time-iot-device-monitoring-with-kinesis.yaml dist/real-time-iot-device-monitoring-with-kinesis.template
 
-echo "Updating code source bucket in template with $1"
-replace="s/%%BUCKET_NAME%%/$1/g"
-echo "sed -i '' -e $replace $dist_dir/$solution_name.template"
-sed -i '' -e $replace "$dist_dir/$solution_name.template"
+echo "Updating code source bucket and version in template with $1 $2"
+bucket="s/%%BUCKET_NAME%%/$1/g"
+echo "sed -i -e $bucket dist/real-time-iot-device-monitoring-with-kinesis.template"
+sed -i -e $bucket dist/real-time-iot-device-monitoring-with-kinesis.template
+
+version="s/%%VERSION%%/$2/g"
+echo "sed -i -e $version dist/real-time-iot-device-monitoring-with-kinesis.template"
+sed -i -e $version dist/real-time-iot-device-monitoring-with-kinesis.template
 
 # Build Custom Resource
 echo "Building CFN custom resource helper Lambda function"
-cd "$initial_dir/source/custom-resource"
+cd "$deployment_dir/../source/custom-resource"
 npm install
 npm run build
 npm run zip
-cp "./dist/custom-resource-helper.zip" "$dist_dir/custom-resource-helper.zip"
-cd "$initial_dir"
+cp "./dist/custom-resource-helper.zip" "$deployment_dir/dist/custom-resource-helper.zip"
+rm -rf dist
+rm -rf node_modules
 
 # Build UpdateDDBLambda
 echo "Building UpdateDDBLambda"
-cd "$initial_dir/source/update_ddb_from_stream"
-rm -rf "./dist" && mkdir "./dist"
-cp "$initial_dir/source/update_ddb_from_stream/update_ddb_from_stream.py" "./dist"
-cd "./dist"
-zip -r update_ddb_from_stream.zip .
-cp "./update_ddb_from_stream.zip" "$dist_dir"
-cd "$initial_dir"
+cd "$deployment_dir/../source/update_ddb_from_stream"
+zip -r "$deployment_dir/dist/update_ddb_from_stream.zip" *
 
 # Build Demo script
 echo "Building Demo Script"
-cd "$initial_dir/source/demo"
-rm -rf "./dist" && mkdir "./dist"
-cp "$initial_dir/source/demo/send-messages.sh" "./dist"
-cd "./dist"
-zip -r demo.zip .
-cp "./demo.zip" "$dist_dir"
-cd "$initial_dir"
+cd "$deployment_dir/../source/demo"
+zip -r "$deployment_dir/dist/demo.zip" *
 
 echo "Copying web site content to $deployment_dir/dist"
-cp -r "$initial_dir/source/web_site" "$dist_dir/"
+cd "$deployment_dir/../source/"
+cp -r web_site "$deployment_dir/dist/" 
 
 echo "Generating web site manifest"
-cd "$deployment_dir/manifest-generator"
+cd $deployment_dir/manifest-generator
 npm install
-node app
-cd "$initial_dir"
+node app.js --target $deployment_dir/dist/web_site --output ../dist/web-site-manifest.json
+
+cd $deployment_dir
 
 echo "Completed building distribution"
