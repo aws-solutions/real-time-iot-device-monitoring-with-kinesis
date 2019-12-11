@@ -9,7 +9,7 @@ sudo apt-get install install zip wget gawk sed -y
 
 ## Building Lambda Package
 ```bash
-./deployment/build-s3-dist.sh source-bucket-base-name
+./deployment/build-s3-dist.sh source-bucket-base-name solution-name solution-version
 ```
 source-bucket-base-name should be the base name for the S3 bucket location where the template will source the Lambda code from.
 The template will append '-[region_name]' to this value.
@@ -24,8 +24,8 @@ Located in deployment/dist
 
 Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-Licensed under the Amazon Software License (the "License"). You may not use this file except in compliance with the License. A copy of the License is located at
+Licensed under the Apache License Version 2.0 (the "License"). You may not use this file except in compliance with the License. A copy of the License is located at
 
-    http://aws.amazon.com/asl/
+    http://www.apache.org/licenses/
 
 or in the "license" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions and limitations under the License.

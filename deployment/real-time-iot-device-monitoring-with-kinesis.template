@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "(SO0039) - Real-Time IoT Device Monitoring with Kinesis Analytics: Analyze IoT Device Connectivity using Kinesis Analytics"
+Description: "(SO0039) - Real-Time IoT Device Monitoring with Kinesis Analytics: Analyze IoT Device Connectivity using Kinesis Analytics, Version %%VERSION%%"
 Parameters:
   UserName:
     Description: The username of the user you want to create in Amazon Cognito.
@@ -43,8 +43,8 @@ Mappings:
   SourceCode:
     General:
       S3Bucket: '%%BUCKET_NAME%%'
-      KeyPrefix: real-time-iot-device-monitoring-with-kinesis/%%VERSION%%
-      LogPrefix: real-time-iot-device-monitoring-with-kinesis/
+      KeyPrefix: '%%SOLUTION_NAME%%/%%VERSION%%'
+      LogPrefix: '%%SOLUTION_NAME%%/'
   KinesisAnalyticsApp:
     Outputs:
       FireHoseStreamName: PROCESSED_METRICS_S3_STREAM
@@ -60,7 +60,7 @@ Mappings:
   Solution:
     Data:
       ID: SO0039
-      Version: %%VERSION%%
+      Version: '%%VERSION%%'
       SendAnonymousUsageData: 'True'
 
 Resources:
@@ -141,6 +141,15 @@ Resources:
     DeletionPolicy: Retain
     Type: AWS::S3::Bucket
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       LoggingConfiguration:
         DestinationBucketName: !Ref LogsBucket
         LogFilePrefix: raw-metrics-bucket/
@@ -149,6 +158,11 @@ Resources:
         - Id: ExpirationRule
           Status: Enabled
           ExpirationInDays: '7'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W51
+            reason: "This is a private bucket. Does not require bucket policy"
 
   RawMetricsDeliveryStreamRole:
     Type: AWS::IAM::Role
@@ -674,6 +688,15 @@ Resources:
     DeletionPolicy: Retain
     Type: AWS::S3::Bucket
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       LoggingConfiguration:
         DestinationBucketName: !Ref LogsBucket
         LogFilePrefix: processed-metrics-bucket/
@@ -682,6 +705,11 @@ Resources:
         - Id: ExpirationRule
           Status: Enabled
           ExpirationInDays: '7'
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W51
+            reason: "This is a private bucket. Does not require bucket policy"
 
   ProcessedMetricsDeliveryStreamRole:
     Type: AWS::IAM::Role
@@ -777,7 +805,7 @@ Resources:
       Handler: update_ddb_from_stream.lambda_handler
       MemorySize: 256
       Role: !GetAtt UpdateDDBLambdaRole.Arn
-      Runtime: python3.7
+      Runtime: python3.8
       Timeout: 300
 
   UpdateDDBLambdaRole:
@@ -954,6 +982,15 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       LoggingConfiguration:
         DestinationBucketName: !Ref LogsBucket
         LogFilePrefix: website-bucket/
@@ -1029,12 +1066,23 @@ Resources:
     DeletionPolicy: Retain
     Type: AWS::S3::Bucket
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       AccessControl: LogDeliveryWrite
     Metadata:
       cfn_nag:
         rules_to_suppress:
           - id: W35
             reason: "This is the logs bucket for all the other S3 Buckets and CloudFront"
+          - id: W51
+            reason: "This is a private bucket. Does not require bucket policy"
 
 
 # Cognito for Dashboard Users
@@ -1252,7 +1300,7 @@ Resources:
       Handler: index.handler
       MemorySize: 256
       Role: !GetAtt CustomResourceHelperRole.Arn
-      Runtime: nodejs8.10
+      Runtime: nodejs12.x
       Timeout: 300
 
   CustomResourceHelperRole:

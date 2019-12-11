@@ -1,0 +1,6 @@
+**/dist
+**/.zip
+**/.DS_Store
+/dev/**/*
+node_modules/
+package-lock.json

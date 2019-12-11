@@ -1,3 +1,15 @@
+######################################################################################################################
+#  Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.                                           #
+#                                                                                                                    #
+#  Licensed under the Apache License Version 2.0 (the "License"). You may not use this file except in compliance     #
+#  with the License. A copy of the License is located at                                                             #
+#                                                                                                                    #
+#      http://www.apache.org/licenses/                                                                               #
+#                                                                                                                    #
+#  or in the "license" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES #
+#  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions    #
+#  and limitations under the License.                                                                                #
+######################################################################################################################
 
 from itertools import groupby
 import boto3
@@ -108,6 +120,7 @@ def sendAnonymousData(event_time,dataDict):
     postDict['Data'] = dataDict
     postDict['TimeStamp'] = event_time
     postDict['Solution'] = os.environ.get('SOLUTION_ID')
+    postDict['Version'] = os.environ.get('SOLUTION_VERSION')
     postDict['UUID'] = os.environ.get('SOLUTION_UUID')
     # API Gateway URL to make HTTP POST call
     url = 'https://metrics.awssolutionsbuilder.com/generic'
