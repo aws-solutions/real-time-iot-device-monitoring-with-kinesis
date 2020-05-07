@@ -9,16 +9,32 @@ sudo apt-get install install zip wget gawk sed -y
 
 ## Building Lambda Package
 ```bash
-./deployment/build-s3-dist.sh source-bucket-base-name solution-name solution-version
+cd deployment/
+./build-s3-dist.sh source-bucket-base-name solution-name solution-version
 ```
 source-bucket-base-name should be the base name for the S3 bucket location where the template will source the Lambda code from.
 The template will append '-[region_name]' to this value.
 For example: ./build-s3-dist.sh solutions
 The template will then expect the source code to be located in the solutions-[region_name] bucket
 
+```bash
+aws s3 cp --recursive regional-s3-assets/ s3://source-bucket-base-name-[region_name]/solution-name/solution-version/
+```
+
 ## CF template and Lambda function
 Located in deployment/dist
 
+```bash
+aws s3 cp global-s3-assets/real-time-iot-device-monitoring-with-kinesis.template s3://source-bucket-base-name-[region_name]/solution-name/solution-version/
+```
+
+## Send test messages
+
+```bash
+aws s3 cp s3://source-bucket-base-name-[region_name]/solution-name/solution-version/demo.zip ./
+unzip demo.zip
+./send-messages.sh --topic iot_device_analytics --region [region_name]
+```
 
 ***
 

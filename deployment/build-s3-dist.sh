@@ -95,7 +95,7 @@ zip -r $build_dist_dir/demo.zip *
 
 echo "Getting third party libraries for web site"
 cd $source_dir/web_site
-npm install bootstrap@3.3.7
+npm install --no-audit bootstrap@3.3.7
 cp node_modules/bootstrap/dist/css/bootstrap.min.css css/
 cp node_modules/bootstrap/dist/js/bootstrap.min.js js/
 
