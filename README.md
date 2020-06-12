@@ -17,9 +17,24 @@ The template will append '-[region_name]' to this value.
 For example: ./build-s3-dist.sh solutions
 The template will then expect the source code to be located in the solutions-[region_name] bucket
 
+```bash
+aws s3 cp --recursive regional-s3-assets/ s3://source-bucket-base-name-[region_name]/solution-name/solution-version/
+```
+
 ## CF template and Lambda function
 The CF Template is located in `deployment/global-s3-assets` directory. The Lambda function is located in `deployment/regional-s3-assets` directory.
 
+```bash
+aws s3 cp global-s3-assets/real-time-iot-device-monitoring-with-kinesis.template s3://source-bucket-base-name-[region_name]/solution-name/solution-version/
+```
+
+## Send test messages
+
+```bash
+aws s3 cp s3://source-bucket-base-name-[region_name]/solution-name/solution-version/demo.zip ./
+unzip demo.zip
+./send-messages.sh --topic iot_device_analytics --region [region_name]
+```
 
 ***
 
