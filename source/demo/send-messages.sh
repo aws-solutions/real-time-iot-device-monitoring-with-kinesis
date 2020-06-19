@@ -59,7 +59,11 @@ for (( i = 1; i <= $ITERATIONS; i++)) {
   echo "humidity: $HUMIDITY"
   echo "sound: $SOUND"
 
-  aws iot-data publish --topic "$TOPIC" --payload "{\"id\":\"1\",\"device\":\"$DEVICE\",\"flow\":$FLOW,\"temp\":$TEMP,\"humidity\":$HUMIDITY,\"sound\":$SOUND}" --profile "$PROFILE" --region "$REGION"
+  payload="{\"id\":\"1\",\"device\":\"$DEVICE\",\"flow\":$FLOW,\"temp\":$TEMP,\"humidity\":$HUMIDITY,\"sound\":$SOUND}"
+  payload_encoded=`echo -n $payload | base64`
+
+  aws iot-data publish --topic "$TOPIC" --payload $payload_encoded --profile "$PROFILE" --region "$REGION"
+
 
   sleep $WAIT
 
