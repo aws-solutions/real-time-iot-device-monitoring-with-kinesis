@@ -46,7 +46,7 @@ for (( i = 1; i <= $ITERATIONS; i++)) {
   SOUND=$(( 100 + $RANDOM % 40 ))
 
   # 3% chance of throwing an anomalous temperature reading
-  if [ $(($RANDOM % 100)) -gt 97 ]
+  if [ $(($RANDOM % 100)) -ge 97 ]
   then
     echo "TEMPERATURE OUT OF RANGE"
     TEMP=$(($TEMP*6))
