@@ -20,6 +20,9 @@ The template will then expect the source code to be located in the solutions-[re
 ## CF template and Lambda function
 The CF Template is located in `deployment/global-s3-assets` directory. The Lambda function is located in `deployment/regional-s3-assets` directory.
 
+## Collection of operational metrics
+
+This solution collects anonymous operational metrics to help AWS improve the quality of features of the solution. For more information, including how to disable this capability, please see the [implementation guide](https://docs.aws.amazon.com/solutions/latest/real-time-iot-device-monitoring-with-kinesis/appendix-c.html).
 
 ***
 
