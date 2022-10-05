@@ -229,298 +229,313 @@ Resources:
       ApplicationCode: !Sub
         - |
           -- Create a common format to be used for all the different metrics for IoT device monitoring
-          CREATE OR REPLACE STREAM FAN_OUT_STREAM
-              ( eventTimeStamp TIMESTAMP, computationType VARCHAR(128), category VARCHAR(128), subcategory INTEGER, unit VARCHAR(128), unitValue DOUBLE);
+            CREATE OR REPLACE STREAM FAN_OUT_STREAM
+                ( 
+                  eventTimeStamp TIMESTAMP, 
+                  computationType VARCHAR(128), 
+                  category VARCHAR(128), 
+                  subcategory INTEGER, 
+                  unit VARCHAR(128), 
+                  unitValue DOUBLE
+                );
 
           -- 1. Create an output stream, which is used to send unique number of connected IoT devices to the destination
-          CREATE OR REPLACE PUMP connected_device_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT current_timestamp as eventTimeStamp, 'ConnectedDevicesCount', 'None', 0, 'Count', * FROM (
-              SELECT STREAM * FROM TABLE(COUNT_DISTINCT_ITEMS_TUMBLING(
-                  CURSOR(SELECT STREAM * FROM source_sql_stream_001),
-                  'device',
-                  60
-                  )
-              )
-          );
+            CREATE OR REPLACE PUMP connected_device_count_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT 
+              current_timestamp as eventTimeStamp, 
+              'ConnectedDevicesCount' AS computationType, 
+              'None' AS category, 
+              0 AS subcategory, 
+              'Count' AS unit, 
+              unitValue 
+            FROM (
+                SELECT STREAM unitValue FROM TABLE(
+                  COUNT_DISTINCT_ITEMS_TUMBLING(
+                    CURSOR(SELECT STREAM * FROM source_sql_stream_001),
+                    'device_id',
+                    60
+                  ) AS unitValue
+                )
+            );
 
-          -- 2. Max of the data point (temp) per connected device
-          CREATE OR REPLACE PUMP per_device_max_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
-            'PerDeviceMaxTemp',
-            "device",
-            0,
-            'Maximum',
-            MAX("temp") AS max_value
-          FROM source_sql_stream_001
-          GROUP BY "device", STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
-
-          -- 3. Min of the data point (temp) per connected device
-          CREATE OR REPLACE PUMP per_device_min_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
-            'PerDeviceMinTemp',
-            "device",
-            0,
-            'Minimum',
-            MIN("temp") AS min_value
-          FROM source_sql_stream_001
-          GROUP BY "device", STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
-
-          -- 4. Avg of the data point (temp) per connected device
-          CREATE OR REPLACE PUMP per_device_avg_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
-            'PerDeviceAvgTemp',
-            "device",
-            0,
-            'Average',
-            AVG("temp") AS avg_value
-          FROM source_sql_stream_001
-          GROUP BY "device", STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
+          -- 2. Count of the data point (flushes) per connected device
+            CREATE OR REPLACE PUMP per_device_flush_count_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
+              'PerDeviceFlushCount' AS computationType,
+              "device_id" AS category,
+              0 AS subcategory,
+              'Count' AS unit,
+              COUNT("device_id") AS unitValue
+            FROM source_sql_stream_001
+            GROUP BY 
+              "device_id", 
+              STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), 
+              STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
 
           -- Setup for Anomaly detection
-          CREATE OR REPLACE STREAM temp_stream (temp INTEGER, device varchar(4), anomaly_score DOUBLE);
+          -- AD stream
+            CREATE OR REPLACE STREAM flush_count_stream (flush_count INTEGER, device_id varchar(4), anomaly_score DOUBLE);
 
-          CREATE OR REPLACE PUMP temp_pump AS INSERT INTO temp_stream
-          SELECT STREAM "temp", "device", anomaly_score
-          FROM TABLE(RANDOM_CUT_FOREST(
-            CURSOR(SELECT STREAM * FROM source_sql_stream_001)
-          ));
+          -- AD pump into AD stream
+            CREATE OR REPLACE PUMP flush_count_pump AS INSERT INTO temp_stream
+            SELECT STREAM "flush_count", "device_id", anomaly_score
+            FROM TABLE(RANDOM_CUT_FOREST(
+              CURSOR(
+                SELECT STREAM
+                  device_id,
+                  COUNT("device_id") AS flush_count
+                FROM source_sql_stream_001
+                GROUP BY 
+                  "device_id", 
+                  STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), 
+                  STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE)
+              )
+            ));
 
-          -- 5. Anomaly detection on the value sent (temp)
-          CREATE OR REPLACE PUMP anomaly_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(temp_stream.rowtime BY INTERVAL '1' MINUTE) as eventTimeStamp,
-            'DeviceTempAnomalyScore',
-            device,
-            temp,
-            'AnomalyScore',
-            anomaly_score
-          FROM temp_stream
-          ORDER BY STEP(temp_stream.rowtime BY INTERVAL '1' MINUTE), anomaly_score DESC;
-
-          -- 6. Average of the data point (temp) across all devices
-          CREATE OR REPLACE PUMP avg_aggregate_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS event_timestamp,
-            'AvgTempValue',
-            'All',
-            0,
-            'Average',
-            AVG("temp") AS avg_value
-          FROM source_sql_stream_001
-          GROUP BY STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
-
-          -- 7. Min of the data point (temp) across all devices
-          CREATE OR REPLACE PUMP min_aggregate_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS event_timestamp,
-            'MinTempValue',
-            'All',
-            0,
-            'Minimum',
-            MIN("temp") AS min_value
-          FROM source_sql_stream_001
-          GROUP BY STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
-
-          -- 8. Max of the data point (temp) across all devices
-          CREATE OR REPLACE PUMP max_aggregate_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS event_timestamp,
-            'MaxTempValue',
-            'All',
-            0,
-            'Maximum',
-            MAX("temp") AS max_value
-          FROM source_sql_stream_001
-          GROUP BY STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
+          -- AD scores into output stream
+            CREATE OR REPLACE PUMP anomaly_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(flush_count_stream.rowtime BY INTERVAL '1' MINUTE) as eventTimeStamp,
+              'FlushCountAnomalyScore',
+              device_id,
+              flush_count,
+              'AnomalyScore',
+              anomaly_score
+            FROM flush_count_stream
+            ORDER BY STEP(flush_count_stream.rowtime BY INTERVAL '1' MINUTE), anomaly_score DESC;
 
           --Setup for 9-14
           -- Sort stream and apply sessions
-          CREATE OR REPLACE STREAM sorted_stream (event_timestamp TIMESTAMP, device VARCHAR(4), flow INTEGER, temp INTEGER, humidity INTEGER);
+            CREATE OR REPLACE STREAM sorted_stream (
+              event_timestamp TIMESTAMP, 
+              device_id VARCHAR(4)
+            );
 
-          CREATE OR REPLACE PUMP sort_pump AS INSERT INTO sorted_stream
-          SELECT STREAM  "COL_time" AS event_timestamp, "device", "flow", "temp", "humidity"
-          FROM source_sql_stream_001
-          ORDER BY STEP(source_sql_stream_001.rowtime BY INTERVAL '10' SECOND), "COL_time";
+            CREATE OR REPLACE PUMP sort_pump AS INSERT INTO sorted_stream
+            SELECT STREAM  "COL_time" AS event_timestamp, "device_id"
+            FROM source_sql_stream_001
+            ORDER BY STEP(source_sql_stream_001.rowtime BY INTERVAL '10' SECOND), "COL_time";
 
+            CREATE OR REPLACE STREAM time_between_events_stream (
+              event_timestamp TIMESTAMP, 
+              seconds_between_events INTEGER, 
+              device_id VARCHAR(4)
+            );
 
-          CREATE OR REPLACE STREAM time_between_events_stream (event_timestamp TIMESTAMP, seconds_between_events INTEGER, device VARCHAR(4));
-
-          CREATE OR REPLACE PUMP time_between_events_pump AS INSERT INTO time_between_events_stream
-          SELECT STREAM event_timestamp,
+            CREATE OR REPLACE PUMP time_between_events_pump AS INSERT INTO time_between_events_stream
+            SELECT STREAM 
+              event_timestamp,
               -- Calculates the time between session events.
               -- tsdiff takes the difference between to timestamps in ms
-            -- compares the current timestamp in the row to the last timestamp
+              -- compares the current timestamp in the row to the last timestamp
               TSDIFF(event_timestamp,
-                  -- Lag pulls a column from a previous event relative to the current event
-                  -- In this case, we use 1 because we want the time between the two events
-                  LAG(event_timestamp, 1) OVER W1) / 1000
-              AS seconds_between_events,
-              device
-          FROM sorted_stream
-          WINDOW W1 as (
-              -- If no unique session_id exists or no client event for ending a session, you must define the start and end of a session.
-            -- If users are expected to have multiple sessions online at a given time, another unique identifier must be added to the partition.
-              PARTITION BY device
-              RANGE INTERVAL '1' HOUR PRECEDING
-          );
+                    -- Lag pulls a column from a previous event relative to the current event
+                    -- In this case, we use 1 because we want the time between the two events
+                    LAG(event_timestamp, 1) OVER W1) / 1000
+                AS seconds_between_events,
+                device_id
+            FROM sorted_stream
+            WINDOW W1 as (
+                -- If no unique session_id exists or no client event for ending a session, you must define the start and end of a session.
+              -- If users are expected to have multiple sessions online at a given time, another unique identifier must be added to the partition.
+                PARTITION BY device_id
+                RANGE INTERVAL '1' HOUR PRECEDING
+            );
 
 
-          CREATE OR REPLACE STREAM connected_flag_stream (new_session_indicator BIGINT, event_timestamp TIMESTAMP, seconds_between_events INTEGER, device VARCHAR(4));
+            CREATE OR REPLACE STREAM connected_flag_stream (
+              new_session_indicator BIGINT, 
+              event_timestamp TIMESTAMP, 
+              seconds_between_events INTEGER, 
+              device_id VARCHAR(4)
+            );
 
-          CREATE OR REPLACE PUMP connected_flag_pump AS INSERT INTO connected_flag_stream
-          SELECT STREAM
-              -- Flag new connected sessions which makes other analytics easier
-              -- Assumes no device has more than one active session
-              (CASE
-                  -- time interval >= 0, part of the same session
-                  WHEN seconds_between_events >= 0 AND seconds_between_events <= 60 THEN 0
-                  -- time interval null, new session
-                  WHEN seconds_between_events IS NULL OR seconds_between_events > 60 THEN UNIX_TIMESTAMP(event_timestamp)
-                  ELSE NULL
-              END) AS new_session_indicator,
-              event_timestamp, seconds_between_events, device
-          FROM time_between_events_stream;
+            CREATE OR REPLACE PUMP connected_flag_pump AS INSERT INTO connected_flag_stream
+            SELECT STREAM
+                -- Flag new connected sessions which makes other analytics easier
+                -- Assumes no device has more than one active session
+                (CASE
+                    -- time interval >= 0, part of the same session
+                    WHEN seconds_between_events >= 0 AND seconds_between_events <= 60 THEN 0
+                    -- time interval null, new session
+                    WHEN seconds_between_events IS NULL OR seconds_between_events > 60 THEN UNIX_TIMESTAMP(event_timestamp)
+                    ELSE NULL
+                END) AS new_session_indicator,
+                event_timestamp, 
+                seconds_between_events, 
+                device_id
+            FROM time_between_events_stream;
 
-          --Group sessions together
-          CREATE OR REPLACE STREAM device_session_stream (sesson_id VARCHAR(128), seconds_between_events INTEGER, device VARCHAR(4));
+            --Group sessions together
+            CREATE OR REPLACE STREAM device_session_stream (
+              sesson_id VARCHAR(128), 
+              seconds_between_events INTEGER, 
+              device_id VARCHAR(4)
+            );
 
-          CREATE OR REPLACE PUMP device_session_pump AS INSERT INTO device_session_stream
-          SELECT STREAM (device || '_' ||
+            CREATE OR REPLACE PUMP device_session_pump AS INSERT INTO device_session_stream
+            SELECT STREAM 
               -- If users are expected to have multiple sessions online at a given time, another unique identifer must be added here.
-                  CAST(MAX(new_session_indicator) OVER W1 AS VARCHAR(128))
-              ) as session_id, seconds_between_events, device
-          FROM connected_flag_stream
-          WINDOW W1 AS (
-              PARTITION BY device
-              RANGE INTERVAL '1' HOUR PRECEDING
-          );
+              (device_id || '_' ||CAST(MAX(new_session_indicator) OVER W1 AS VARCHAR(128))) as session_id, 
+              seconds_between_events, 
+              device_id
+            FROM connected_flag_stream
+            WINDOW W1 AS (
+                PARTITION BY device_id
+                RANGE INTERVAL '1' HOUR PRECEDING
+            );
 
-          -- Calculate connected time events for devices
-          CREATE OR REPLACE STREAM session_connected_time_stream (sesson_id VARCHAR(128), connected_time_seconds INTEGER);
+            -- Calculate connected time events for devices
+            CREATE OR REPLACE STREAM session_connected_time_stream (
+              sesson_id VARCHAR(128), 
+              connected_time_seconds INTEGER
+            );
 
-          CREATE OR REPLACE PUMP session_connected_time_pump AS INSERT INTO session_connected_time_stream
-          SELECT STREAM sesson_id, SUM(seconds_between_events) OVER W1 AS connected_time_seconds
-          FROM device_session_stream
-          WINDOW W1 AS (
-              PARTITION BY sesson_id
-              RANGE INTERVAL '1' HOUR PRECEDING
-          );
+            CREATE OR REPLACE PUMP session_connected_time_pump AS INSERT INTO session_connected_time_stream
+            SELECT STREAM 
+              sesson_id, 
+              SUM(seconds_between_events) OVER W1 AS connected_time_seconds
+            FROM device_session_stream
+            WINDOW W1 AS (
+                PARTITION BY sesson_id
+                RANGE INTERVAL '1' HOUR PRECEDING
+            );
 
-          --Per session time stream for disconnected devices that came back online within an hour
-          CREATE OR REPLACE STREAM per_session_disconnected_time_stream (sesson_id VARCHAR(128), max_disconnected_time_seconds INTEGER, avg_disconnected_time_seconds INTEGER, min_disconnected_time_seconds INTEGER);
+            --Per session time stream for disconnected devices that came back online within an hour
+            CREATE OR REPLACE STREAM per_session_disconnected_time_stream (
+              sesson_id VARCHAR(128), 
+              max_disconnected_time_seconds INTEGER, 
+              avg_disconnected_time_seconds INTEGER, 
+              min_disconnected_time_seconds INTEGER
+            );
 
-          CREATE OR REPLACE PUMP per_session_disconnected_time_pump AS INSERT INTO per_session_disconnected_time_stream
-          SELECT STREAM sesson_id,
-              MAX(connected_time_seconds) AS max_disconnected_time_seconds,
-              AVG(connected_time_seconds) AS avg_disconnected_time_seconds,
-              MIN(connected_time_seconds) AS min_disconnected_time_seconds
-          FROM session_connected_time_stream
-          WHERE connected_time_seconds > 60
-          GROUP BY STEP(session_connected_time_stream.rowtime BY INTERVAL '10' SECOND), sesson_id;
+            CREATE OR REPLACE PUMP per_session_disconnected_time_pump AS INSERT INTO per_session_disconnected_time_stream
+            SELECT STREAM 
+                sesson_id,
+                MAX(connected_time_seconds) AS max_disconnected_time_seconds,
+                AVG(connected_time_seconds) AS avg_disconnected_time_seconds,
+                MIN(connected_time_seconds) AS min_disconnected_time_seconds
+            FROM session_connected_time_stream
+            WHERE connected_time_seconds > 60
+            GROUP BY STEP(session_connected_time_stream.rowtime BY INTERVAL '10' SECOND), sesson_id;
 
           --9. Max for disconnected devices that came back online within an hour
-          CREATE OR REPLACE PUMP maximum_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'MaxDisconnTime',
-            'None',
-            0,
-            'Maximum',
-            MAX(max_disconnected_time_seconds) AS max_value
-          FROM per_session_disconnected_time_stream
-          GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP maximum_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'MaxDisconnTime' AS computationType,
+              'None' AS Category,
+              0 AS subcategory,
+              'Maximum' AS unit,
+              MAX(max_disconnected_time_seconds) AS unitValue
+            FROM per_session_disconnected_time_stream
+            GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --10. Min for disconnected devices that came back online within an hour
-          CREATE OR REPLACE PUMP minimum_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'MinDisconnTime',
-            'None',
-            0,
-            'Minimum',
-            MIN(min_disconnected_time_seconds) AS min_value
-          FROM per_session_disconnected_time_stream
-          GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP minimum_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'MinDisconnTime' AS computationType,
+              'None' AS category,
+              0 AS subcategory,
+              'Minimum' AS unit,
+              MIN(min_disconnected_time_seconds) AS unitValue
+            FROM per_session_disconnected_time_stream
+            GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --11. Avg for disconnected devices that came back online within an hour
-          CREATE OR REPLACE PUMP average_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'AvgDisconnTime',
-            'None',
-            0,
-            'Average',
-            AVG(avg_disconnected_time_seconds) AS avg_value
-          FROM per_session_disconnected_time_stream
-          GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP average_disconnected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'AvgDisconnTime' AS computationType,
+              'None' AS category,
+              0 AS subcategory,
+              'Average' AS unit,
+              AVG(avg_disconnected_time_seconds) AS unitValue
+            FROM per_session_disconnected_time_stream
+            GROUP BY STEP(per_session_disconnected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --Per session time stream for connected devices
-          CREATE OR REPLACE STREAM per_session_connected_time_stream (sesson_id VARCHAR(128), max_connected_time_seconds INTEGER, avg_connected_time_seconds INTEGER, min_connected_time_seconds INTEGER);
+            CREATE OR REPLACE STREAM per_session_connected_time_stream (
+              sesson_id VARCHAR(128), 
+              max_connected_time_seconds INTEGER, 
+              avg_connected_time_seconds INTEGER, 
+              min_connected_time_seconds INTEGER
+            );
 
-          CREATE OR REPLACE PUMP per_session_connected_time_pump AS INSERT INTO per_session_connected_time_stream
-          SELECT STREAM sesson_id,
+            CREATE OR REPLACE PUMP per_session_connected_time_pump AS INSERT INTO per_session_connected_time_stream
+            SELECT STREAM 
+              sesson_id,
               MAX(connected_time_seconds) AS max_connected_time_seconds,
               AVG(connected_time_seconds) AS avg_connected_time_seconds,
               MIN(connected_time_seconds) AS min_connected_time_seconds
-          FROM session_connected_time_stream
-          WHERE connected_time_seconds <= 60
-          GROUP BY STEP(session_connected_time_stream.rowtime BY INTERVAL '10' SECOND), sesson_id;
+            FROM session_connected_time_stream
+            WHERE connected_time_seconds <= 60
+            GROUP BY STEP(session_connected_time_stream.rowtime BY INTERVAL '10' SECOND), sesson_id;
 
           --12. Max for connected devices
-          CREATE OR REPLACE PUMP maximum_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'MaxConnTime',
-            'None',
-            0,
-            'Maximum',
-            MAX(max_connected_time_seconds) AS max_value
-          FROM per_session_connected_time_stream
-          GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP maximum_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'MaxConnTime' AS computationType,
+              'None' AS category,
+              0 AS subcategory,
+              'Maximum' AS unit,
+              MAX(max_connected_time_seconds) AS unitValue
+            FROM per_session_connected_time_stream
+            GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --13. Min for connected devices
-          CREATE OR REPLACE PUMP minimum_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'MinConnTime',
-            'None',
-            0,
-            'Minimum',
-            MIN(min_connected_time_seconds) AS min_value
-          FROM per_session_connected_time_stream
-          GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP minimum_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'MinConnTime' AS computationType,
+              'None' AS category,
+              0 AS subcategory,
+              'Minimum' AS unit,
+              MIN(min_connected_time_seconds) AS unitValue
+            FROM per_session_connected_time_stream
+            GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --14. Avg for connected devices
-          CREATE OR REPLACE PUMP average_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
-          SELECT STREAM
-            STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
-            'AvgConnTime',
-            'None',
-            0,
-            'Average',
-            AVG(avg_connected_time_seconds) AS avg_value
-          FROM per_session_connected_time_stream
-          GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
+            CREATE OR REPLACE PUMP average_connected_time_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND) AS event_timestamp,
+              'AvgConnTime' AS computationType,
+              'None' AS category,
+              0 AS subcategory,
+              'Average' AS unit,
+              AVG(avg_connected_time_seconds) AS unitValue
+            FROM per_session_connected_time_stream
+            GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --15. Fan out to multiple Kinesis Analytics Outputs
-          CREATE STREAM ${LambdaStreamName}
-              ( eventTimeStamp TIMESTAMP, computationType VARCHAR(128), category VARCHAR(128), subcategory INTEGER, unit VARCHAR(128), unitValue DOUBLE);
+            CREATE STREAM ${LambdaStreamName}
+                ( 
+                  eventTimeStamp TIMESTAMP, 
+                  computationType VARCHAR(128), 
+                  category VARCHAR(128), 
+                  subcategory INTEGER, 
+                  unit VARCHAR(128), 
+                  unitValue DOUBLE
+                );
 
-          CREATE OR REPLACE PUMP fan_out_lambda_pump AS
-              INSERT INTO ${LambdaStreamName}
-                  SELECT *
-                  FROM FAN_OUT_STREAM;
+            CREATE OR REPLACE PUMP fan_out_lambda_pump AS
+              INSERT INTO ${LambdaStreamName} SELECT * FROM FAN_OUT_STREAM;
 
-          CREATE STREAM ${FireHoseStreamName}
-              ( eventTimeStamp TIMESTAMP, computationType VARCHAR(128), category VARCHAR(128), subcategory INTEGER, unit VARCHAR(128), unitValue DOUBLE);
+            CREATE STREAM ${FireHoseStreamName}
+                ( 
+                  eventTimeStamp TIMESTAMP, 
+                  computationType VARCHAR(128), 
+                  category VARCHAR(128), 
+                  subcategory INTEGER, 
+                  unit VARCHAR(128), 
+                  unitValue DOUBLE
+                );
 
-          CREATE OR REPLACE PUMP fan_out_firehose_pump AS
-              INSERT INTO ${FireHoseStreamName}
-                  SELECT *
-                  FROM FAN_OUT_STREAM;
+            CREATE OR REPLACE PUMP fan_out_firehose_pump AS
+                INSERT INTO ${FireHoseStreamName} SELECT * FROM FAN_OUT_STREAM;
         - LambdaStreamName: !FindInMap
             - KinesisAnalyticsApp
             - Outputs
@@ -537,18 +552,9 @@ Resources:
               - Name: 'COL_time'
                 SqlType: 'TIMESTAMP'
                 Mapping: '$.ts'
-              - Name: 'device'
+              - Name: 'device_id'
                 SqlType: 'VARCHAR(4)'
-                Mapping: '$.device'
-              - Name: 'flow'
-                SqlType: 'INTEGER'
-                Mapping: '$.flow'
-              - Name: 'temp'
-                SqlType: 'INTEGER'
-                Mapping: '$.temp'
-              - Name: 'humidity'
-                SqlType: 'INTEGER'
-                Mapping: '$.humidity'
+                Mapping: '$.device_id'
             RecordFormat:
               RecordFormatType: 'JSON'
               MappingParameters:
