@@ -51,7 +51,15 @@ type_operator_map = {
     'AvgDisconnTime': avg,
     'MaxConnTime': max,
     'MinConnTime': min,
-    'AvgConnTime': avg
+    'AvgConnTime': avg,
+    'ConnectedDevicesCount': max,
+    'PerDeviceFlushCount': max,
+    'MaxDisconnTime': max,
+    'MinDisconnTime': min,
+    'AvgDisconnTime': avg,
+    'MaxConnTime': max,
+    'MinConnTime': min,
+    'AvgConnTime': avg,
 }
 
 def put_record_with_retry(metric_type, event_time, record_data, merged_data, concurrency_token, attempt=0):
