@@ -49,6 +49,7 @@ Mappings:
     Outputs:
       FireHoseStreamName: PROCESSED_METRICS_S3_STREAM
       LambdaStreamName: UPDATE_DDB_LAMBDA_STREAM
+      AlertStreamName: FLUSH_COUNT_ALERT_STREAM
   DDB:
     Scaling:
       ReadTargetUtilization: 70
@@ -240,56 +241,82 @@ Resources:
                 );
 
           -- 1. Create an output stream, which is used to send unique number of connected IoT devices to the destination
-            CREATE OR REPLACE PUMP connected_device_count_pump AS INSERT INTO FAN_OUT_STREAM
+            CREATE OR REPLACE PUMP connected_device_count_pump AS 
+            INSERT INTO FAN_OUT_STREAM
             SELECT 
               current_timestamp as eventTimeStamp, 
               'ConnectedDevicesCount' AS computationType, 
               'None' AS category, 
               0 AS subcategory, 
               'Count' AS unit, 
-              unitValue 
+              * 
             FROM (
-                SELECT STREAM unitValue FROM TABLE(
+                SELECT STREAM * FROM TABLE(
                   COUNT_DISTINCT_ITEMS_TUMBLING(
                     CURSOR(SELECT STREAM * FROM source_sql_stream_001),
                     'device_id',
                     60
-                  ) AS unitValue
+                  )
                 )
             );
 
           -- 2. Count of the data point (flushes) per connected device
-            CREATE OR REPLACE PUMP per_device_flush_count_pump AS INSERT INTO FAN_OUT_STREAM
+            CREATE OR REPLACE PUMP per_minuite_device_flush_count_pump AS INSERT INTO FAN_OUT_STREAM
             SELECT STREAM
-              STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
+              STEP(source_sql_stream_001."ts" BY INTERVAL '1' MINUTE) AS eventTimeStamp,
               'PerDeviceFlushCount' AS computationType,
               "device_id" AS category,
-              0 AS subcategory,
+              1 AS subcategory,
               'Count' AS unit,
               COUNT("device_id") AS unitValue
             FROM source_sql_stream_001
             GROUP BY 
               "device_id", 
               STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), 
-              STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE);
+              STEP(source_sql_stream_001."ts" BY INTERVAL '1' MINUTE);
+
+            CREATE OR REPLACE PUMP per_hour_device_flush_count_pump AS INSERT INTO FAN_OUT_STREAM
+            SELECT STREAM
+              MAX("ts") OVER W1 AS eventTimeStamp,
+              'PerDeviceFlushCount' AS computationType,
+              "device_id" AS category,
+              60 AS subcategory,
+              'Count' AS unit,
+              COUNT("device_id") OVER W1 AS unitValue
+            FROM source_sql_stream_001
+            WINDOW W1 AS (PARTITION BY "device_id" RANGE INTERVAL '1' HOUR PRECEDING);
+
+            -- CREATE OR REPLACE PUMP per_day_device_flush_count_pump AS INSERT INTO FAN_OUT_STREAM
+            -- SELECT STREAM
+            --   STEP(source_sql_stream_001."ts" BY INTERVAL '1' DAY) AS eventTimeStamp,
+            --   'PerDeviceFlushCount' AS computationType,
+            --   "device_id" AS category,
+            --   1440 AS subcategory,
+            --   'Count' AS unit,
+            --   COUNT("device_id") AS unitValue
+            -- FROM source_sql_stream_001
+            -- GROUP BY 
+            --   "device_id", 
+            --   STEP(source_sql_stream_001.rowtime BY INTERVAL '1' DAY), 
+            --   STEP(source_sql_stream_001."ts" BY INTERVAL '1' DAY);
 
           -- Setup for Anomaly detection
           -- AD stream
             CREATE OR REPLACE STREAM flush_count_stream (flush_count INTEGER, device_id varchar(4), anomaly_score DOUBLE);
 
           -- AD pump into AD stream
-            CREATE OR REPLACE PUMP flush_count_pump AS INSERT INTO temp_stream
+            CREATE OR REPLACE PUMP flush_count_pump AS INSERT INTO flush_count_stream
             SELECT STREAM "flush_count", "device_id", anomaly_score
             FROM TABLE(RANDOM_CUT_FOREST(
               CURSOR(
                 SELECT STREAM
-                  device_id,
-                  COUNT("device_id") AS flush_count
+                  "device_id",
+                  COUNT("device_id") AS "flush_count"
                 FROM source_sql_stream_001
                 GROUP BY 
                   "device_id", 
                   STEP(source_sql_stream_001.rowtime BY INTERVAL '1' MINUTE), 
-                  STEP(source_sql_stream_001."COL_time" BY INTERVAL '1' MINUTE)
+                  STEP(source_sql_stream_001."ts" BY INTERVAL '1' MINUTE)
               )
             ));
 
@@ -313,9 +340,9 @@ Resources:
             );
 
             CREATE OR REPLACE PUMP sort_pump AS INSERT INTO sorted_stream
-            SELECT STREAM  "COL_time" AS event_timestamp, "device_id"
+            SELECT STREAM  "ts" AS event_timestamp, "device_id"
             FROM source_sql_stream_001
-            ORDER BY STEP(source_sql_stream_001.rowtime BY INTERVAL '10' SECOND), "COL_time";
+            ORDER BY STEP(source_sql_stream_001.rowtime BY INTERVAL '10' SECOND), "ts";
 
             CREATE OR REPLACE STREAM time_between_events_stream (
               event_timestamp TIMESTAMP, 
@@ -511,7 +538,7 @@ Resources:
             GROUP BY STEP(per_session_connected_time_stream.rowtime BY INTERVAL '10' SECOND);
 
           --15. Fan out to multiple Kinesis Analytics Outputs
-            CREATE STREAM ${LambdaStreamName}
+            CREATE STREAM UPDATE_DDB_LAMBDA_STREAM
                 ( 
                   eventTimeStamp TIMESTAMP, 
                   computationType VARCHAR(128), 
@@ -522,9 +549,9 @@ Resources:
                 );
 
             CREATE OR REPLACE PUMP fan_out_lambda_pump AS
-              INSERT INTO ${LambdaStreamName} SELECT * FROM FAN_OUT_STREAM;
+              INSERT INTO UPDATE_DDB_LAMBDA_STREAM SELECT * FROM FAN_OUT_STREAM;
 
-            CREATE STREAM ${FireHoseStreamName}
+            CREATE STREAM PROCESSED_METRICS_S3_STREAM
                 ( 
                   eventTimeStamp TIMESTAMP, 
                   computationType VARCHAR(128), 
@@ -535,7 +562,27 @@ Resources:
                 );
 
             CREATE OR REPLACE PUMP fan_out_firehose_pump AS
-                INSERT INTO ${FireHoseStreamName} SELECT * FROM FAN_OUT_STREAM;
+                INSERT INTO PROCESSED_METRICS_S3_STREAM SELECT * FROM FAN_OUT_STREAM;
+
+          -- Send alerts if hourly flush rate is too large
+            CREATE OR REPLACE STREAM flush_count_alert_stream
+                  ( 
+                    eventTimeStamp TIMESTAMP, 
+                    device_id VARCHAR(4),
+                    hourly_flush_count DOUBLE
+                  );
+
+            CREATE OR REPLACE PUMP flush_count_alert_pump AS 
+              INSERT INTO flush_count_alert_stream
+                  SELECT 
+                    eventTimeStamp,
+                    category AS "device_id",
+                    unitValue AS "hourly_flush_count"
+                  FROM FAN_OUT_STREAM
+                  WHERE 
+                    computationType = 'PerDeviceFlushCount'
+                    AND subcategory = 60
+                    AND unitValue > 10;
         - LambdaStreamName: !FindInMap
             - KinesisAnalyticsApp
             - Outputs
@@ -544,6 +591,10 @@ Resources:
             - KinesisAnalyticsApp
             - Outputs
             - FireHoseStreamName
+          AlertStreamName: !FindInMap
+            - KinesisAnalyticsApp
+            - Outputs
+            - AlertStreamName
 
       Inputs:
         - NamePrefix: 'SOURCE_SQL_STREAM'
@@ -608,6 +659,15 @@ Resources:
                 Action:
                   - lambda:InvokeFunction
                 Resource: !Sub '${UpdateDDBLambda.Arn}'
+        # Invoke SNSNotifyLambda
+        - PolicyName: SNSNotifyLambdaInvocation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub '${SNSNotifyLambda.Arn}'
         # Write to CloudWatch
         - PolicyName: KinesisAnalyticsAppLogging
           PolicyDocument:
@@ -667,6 +727,26 @@ Resources:
           - KinesisAnalyticsApp
           - Outputs
           - LambdaStreamName
+
+  KinesisAnalyticsAppAlertLambdaOutput:
+    Type: AWS::KinesisAnalytics::ApplicationOutput
+
+    # Use DependsOn to serialize adding Application Outputs to reduce likelihood of errors.
+    DependsOn: 
+      - KinesisAnalyticsAppFirehoseOutput
+      - SNSNotifyLambda
+    Properties:
+      ApplicationName: !Ref KinesisAnalyticsApp
+      Output:
+        DestinationSchema:
+          RecordFormatType: 'JSON'
+        LambdaOutput:
+          ResourceARN: !Sub '${SNSNotifyLambda.Arn}'
+          RoleARN: !Sub '${KinesisAnalyticsAppRole.Arn}'
+        Name: !FindInMap
+          - KinesisAnalyticsApp
+          - Outputs
+          - AlertStreamName
 
   ProcessedMetricsDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
@@ -1483,6 +1563,93 @@ Resources:
       ApplicationName: !Ref KinesisAnalyticsApp
       CustomResourceAction: StartKinesisApplication
       UUID: !GetAtt GenerateUUID.UUID
+
+# SNSNotifyLambda
+  SNSNotifyLambda:
+    DependsOn:
+      - SNSNotifyTopic
+      - SNSNotifyLambdaRole
+    Type: AWS::Lambda::Function
+    Properties:
+      Environment:
+        Variables:
+          SNS_ARN: !Ref SNSNotifyTopic
+      Code:
+        S3Bucket: !Sub
+          - ${Param1}-${AWS::Region}
+          - Param1: !FindInMap
+              - SourceCode
+              - General
+              - S3Bucket
+        S3Key: !Sub
+          - ${Param1}/send_alert_sns.zip
+          - Param1: !FindInMap
+              - SourceCode
+              - General
+              - KeyPrefix
+      Description: Sends alerts from Kinesis to SNS.
+      Handler: send_alert_sns.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt SNSNotifyLambdaRole.Arn
+      Runtime: python3.8
+      Timeout: 300
+
+  SNSNotifyTopic:
+    Type: AWS::SNS::Topic
+
+  SNSNotifyLambdaRole:
+    DependsOn:
+      - SNSNotifyTopic
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+            - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Write to SnS
+        - PolicyName: PushToSnS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSNotifyTopic
+        # Write to CloudWatch
+        - PolicyName: SNSNotifyLambdaLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutDestination
+                  - logs:PutLogEvents
+                Resource:
+                  !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref AWS::Region
+                      - ':'
+                      - !Ref AWS::AccountId
+                      - ':log-group:*'
+
+  SNSNotifySubscription:
+    DependsOn:
+      - SNSNotifyTopic
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref UserEmail
+      Protocol: email
+      TopicArn: !Ref SNSNotifyTopic
 
 Outputs:
   DashboardUrl:

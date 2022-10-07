@@ -88,6 +88,9 @@ echo "Building UpdateDDBLambda"
 cd $source_dir/update_ddb_from_stream
 zip -r $build_dist_dir/update_ddb_from_stream.zip *
 
+cd $source_dir/send_alert_sns
+zip -r $build_dist_dir/send_alert_sns.zip *
+
 # Build Demo script
 echo "Building Demo Script"
 cd $source_dir/demo
@@ -127,3 +130,6 @@ node app.js --target $build_dist_dir/web_site --output $build_dist_dir/web-site-
 cd $template_dir
 
 echo "Completed building distribution"
+
+echo "Uploading distribution to S3: s3://$1-us-east-1/$2/$3/"
+aws s3 cp regional-s3-assets "s3://$1-us-east-1/$2/$3/" --recursive

@@ -60,6 +60,7 @@ type_operator_map = {
     'MaxConnTime': max,
     'MinConnTime': min,
     'AvgConnTime': avg,
+    'FlushCountAnomalyScore': max,
 }
 
 def put_record_with_retry(metric_type, event_time, record_data, merged_data, concurrency_token, attempt=0):

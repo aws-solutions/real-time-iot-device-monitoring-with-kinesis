@@ -1,9 +1,11 @@
+set -e 
 # Set Defaults
 REGION='us-east-1'
 TOPIC='iot_device_analytics'
 PROFILE='default'
 ITERATIONS=1000
 WAIT=2
+DEVICE=""
 
 # Get command line parameters
 while [ "$1" != "" ]; do
@@ -32,26 +34,31 @@ while [ "$1" != "" ]; do
     shift
     WAIT=$1
     ;;
+
+    -d | --device )
+    shift
+    DEVICE=$1
+    ;;
   esac
   shift
 done
 
 
 for (( i = 1; i <= $ITERATIONS; i++)) {
-
-  DEVICE="P0"$((1 + $RANDOM % 5))
+  DEVICE_ID=$DEVICE
+  if [ -z "$DEVICE_ID" ]; then
+    DEVICE_ID="P0"$((1 + $RANDOM % 5))
+  fi
 
   echo "Publishing message $i/$ITERATIONS to IoT topic $TOPIC:"
-  echo "device: $DEVICE"
-
+  payload="{\"device_id\": \"$DEVICE_ID\", \"ts\": \"$(date +%s)\"}"
+  echo "$payload"
+  
   aws iot-data publish \
     --topic "$TOPIC" \
-    --profile "$PROFILE" \
     --region "$REGION" \
-    --payload '{'
-      '"device_id": "' $DEVICE '", '
-      '"ts": "' $(date +%s) '",'
-      '}'
+    --cli-binary-format raw-in-base64-out \
+    --payload "$payload"
 
   sleep $WAIT
 
